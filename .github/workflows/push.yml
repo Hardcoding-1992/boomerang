@@ -1,0 +1,69 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  lint:
+    runs-on: ubuntu-20.04
+    name: lint
+    steps:
+      - uses: actions/checkout@master
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.13"
+      - run: |
+          sudo apt-get update
+          sudo apt-get remove libhashkit2 libmemcached11 || true
+          sudo apt-get install -y libmemcached-dev
+      - run: pip install tox
+      - run: tox -e lint
+      - run: tox -e docs
+
+  build-unix:
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ["ubuntu-20.04"]
+        python: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        concurrency: ["cpython", "gevent"]
+
+    runs-on: ${{ matrix.os }}
+    name: test on ${{ matrix.python }} (${{ matrix.os }}, ${{ matrix.concurrency }})
+
+    services:
+      memcached:
+        image: memcached:latest
+        ports:
+          - 11211:11211
+      rabbitmq:
+        image: rabbitmq:3
+        env:
+          RABBITMQ_DEFAULT_USER: "dramatiq"
+          RABBITMQ_DEFAULT_PASS: "dramatiq"
+        ports:
+          - 5672:5672
+        options: '--hostname "rmq" --health-cmd "rabbitmqctl status" --health-interval 10s --health-timeout 10s --health-retries 3 --health-start-period 60s'
+      redis:
+        image: redis:latest
+        ports:
+          - 6379:6379
+
+    steps:
+      - uses: actions/checkout@master
+      - uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python }}
+      - run: |
+          sudo apt-get update
+          sudo apt-get remove libhashkit2 libmemcached11 || true
+          sudo apt-get install -y libmemcached-dev
+      - run: pip install -e '.[dev]'
+      - run: pytest --benchmark-skip
+        if: ${{ matrix.concurrency == 'cpython' }}
+        env:
+          RABBITMQ_USERNAME: "dramatiq"
+          RABBITMQ_PASSWORD: "dramatiq"
+      - run: python pytest-gevent.py --benchmark-skip
+        if: ${{ matrix.concurrency == 'gevent' }}
+        env:
+          RABBITMQ_USERNAME: "dramatiq"
+          RABBITMQ_PASSWORD: "dramatiq"
